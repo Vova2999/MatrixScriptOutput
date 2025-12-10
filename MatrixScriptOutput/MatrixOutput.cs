@@ -134,10 +134,10 @@ public static class MatrixOutput
             lock (LockObject)
             {
                 if (!Data.Any())
-                    return;
-
-                Task.Delay(OutputDelay).Wait();
+                    break;
             }
+
+            Task.Delay(OutputDelay * 1.1).Wait();
         }
     }
 }
