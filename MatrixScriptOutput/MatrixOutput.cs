@@ -35,7 +35,8 @@ public static class MatrixOutput
             .ToArray();
 
     private static readonly Random Random = new();
-    private static readonly object LockObject = new();
+    private static readonly object DataLockObject = new();
+    private static readonly object WriteLockObject = new();
     private static readonly List<MatrixOutputData> Data = [];
 
     private static readonly MatrixOutputSymbol[][] Symbols =
@@ -80,7 +81,7 @@ public static class MatrixOutput
     {
         var changedPositions = new List<(int Width, int Height)>();
 
-        lock (LockObject)
+        lock (DataLockObject)
         {
             Data.RemoveAll(data => data.Index >= data.Line.Length + SymbolColors.Length);
 
@@ -131,15 +132,18 @@ public static class MatrixOutput
         if (string.IsNullOrEmpty(line))
             return;
 
-        (int Position, int Index)[] dataCopy;
+        lock (WriteLockObject)
+        {
+            (int Position, int Index)[] dataCopy;
 
-        lock (LockObject)
-            dataCopy = Data.Select(data => (data.Position, data.Index)).ToArray();
+            lock (DataLockObject)
+                dataCopy = Data.Select(data => (data.Position, data.Index)).ToArray();
 
-        var position = GetNewPosition(dataCopy);
+            var position = GetNewPosition(dataCopy);
 
-        lock (LockObject)
-            Data.Add(new MatrixOutputData { Line = line, Position = position });
+            lock (DataLockObject)
+                Data.Add(new MatrixOutputData { Line = line, Position = position });
+        }
     }
 
     private static int GetNewPosition((int Position, int Index)[] dataCopy)
@@ -164,7 +168,7 @@ public static class MatrixOutput
     {
         while (true)
         {
-            lock (LockObject)
+            lock (DataLockObject)
             {
                 if (!Data.Any())
                     break;
