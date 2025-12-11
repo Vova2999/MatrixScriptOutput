@@ -68,46 +68,7 @@ public static class MatrixOutput
     {
         try
         {
-            var changedPositions = new List<(int Width, int Height)>();
-
-            lock (LockObject)
-            {
-                Data.RemoveAll(data => data.Index >= data.Line.Length + SymbolColors.Length);
-
-                foreach (var data in Data)
-                {
-                    var width = data.Position;
-                    foreach (var symbolColorIndex in Enumerable.Range(0, SymbolColors.Length))
-                    {
-                        var height = data.Index - symbolColorIndex;
-
-                        if (height < 0 || height >= data.Line.Length)
-                            continue;
-
-                        if (Symbols[width][height].Symbol == data.Line[height] && (Symbols[width][height].Color == SymbolColors[symbolColorIndex] || data.Line[height] == ' '))
-                            continue;
-
-                        Symbols[width][height] = new MatrixOutputSymbol(data.Line[height], SymbolColors[symbolColorIndex]);
-                        changedPositions.Add((width, height));
-                    }
-
-                    var clearSymbolHeight = data.Index - SymbolColors.Length;
-                    if (clearSymbolHeight >= 0)
-                    {
-                        Symbols[width][clearSymbolHeight] = new MatrixOutputSymbol(' ', 0);
-                        changedPositions.Add((width, clearSymbolHeight));
-                    }
-
-                    data.Index++;
-                }
-            }
-
-            Console.CursorVisible = false;
-            var stringBuilder = new StringBuilder(changedPositions.Count * 14);
-            foreach (var (width, height) in changedPositions)
-                stringBuilder.Append($"\u001b[{height + 1};{width + 1}H\u001b[38;5;{Symbols[width][height].Color}m{Symbols[width][height].Symbol}");
-
-            Console.Write(stringBuilder.ToString());
+            PrintChangedPositions(CalculateChangedPositions());
         }
         catch
         {
@@ -115,16 +76,88 @@ public static class MatrixOutput
         }
     }
 
+    private static List<(int Width, int Height)> CalculateChangedPositions()
+    {
+        var changedPositions = new List<(int Width, int Height)>();
+
+        lock (LockObject)
+        {
+            Data.RemoveAll(data => data.Index >= data.Line.Length + SymbolColors.Length);
+
+            foreach (var data in Data)
+            {
+                var width = data.Position;
+                foreach (var symbolColorIndex in Enumerable.Range(0, SymbolColors.Length))
+                {
+                    var lineHeight = data.Index - symbolColorIndex;
+                    var symbolHeight = lineHeight % Console.WindowHeight;
+
+                    if (lineHeight < 0 || lineHeight >= data.Line.Length)
+                        continue;
+
+                    if (Symbols[width][symbolHeight].Symbol == data.Line[lineHeight] && (Symbols[width][symbolHeight].Color == SymbolColors[symbolColorIndex] || data.Line[lineHeight] == ' '))
+                        continue;
+
+                    Symbols[width][symbolHeight] = new MatrixOutputSymbol(data.Line[lineHeight], SymbolColors[symbolColorIndex]);
+                    changedPositions.Add((width, symbolHeight));
+                }
+
+                var clearSymbolHeight = (data.Index - SymbolColors.Length) % Console.WindowHeight;
+                if (clearSymbolHeight >= 0)
+                {
+                    Symbols[width][clearSymbolHeight] = new MatrixOutputSymbol(' ', 0);
+                    changedPositions.Add((width, clearSymbolHeight));
+                }
+
+                data.Index++;
+            }
+        }
+
+        return changedPositions;
+    }
+
+    private static void PrintChangedPositions(List<(int Width, int Height)> changedPositions)
+    {
+        var stringBuilder = new StringBuilder(changedPositions.Count * 14);
+        foreach (var (width, height) in changedPositions)
+            stringBuilder.Append($"\u001b[{height + 1};{width + 1}H\u001b[38;5;{Symbols[width][height].Color}m{Symbols[width][height].Symbol}");
+
+        Console.CursorVisible = false;
+        Console.Write(stringBuilder.ToString());
+    }
+
     public static void WriteLine(string? line)
     {
         if (string.IsNullOrEmpty(line))
             return;
 
-        var position = Random.Next(0, Console.WindowWidth);
-        var data = new MatrixOutputData { Line = line, Position = position };
+        (int Position, int Index)[] dataCopy;
 
         lock (LockObject)
-            Data.Add(data);
+            dataCopy = Data.Select(data => (data.Position, data.Index)).ToArray();
+
+        var position = GetNewPosition(dataCopy);
+
+        lock (LockObject)
+            Data.Add(new MatrixOutputData { Line = line, Position = position });
+    }
+
+    private static int GetNewPosition((int Position, int Index)[] dataCopy)
+    {
+        var allPositions = Enumerable.Range(0, Console.WindowWidth).Select(position => (int?) position).ToHashSet();
+        var positionWithoutNeighbors = allPositions.Except(dataCopy.SelectMany(data => Enumerable.Range(-1, 3).Select(index => (int?) index + data.Position))).OrderBy(_ => Random.Next()).FirstOrDefault();
+        if (positionWithoutNeighbors.HasValue)
+            return positionWithoutNeighbors.Value;
+
+        var positionWithNeighbors = allPositions.Except(dataCopy.Select(data => (int?) data.Position)).OrderBy(_ => Random.Next()).FirstOrDefault();
+        if (positionWithNeighbors.HasValue)
+            return positionWithNeighbors.Value;
+
+        var middleHeight = Console.WindowHeight * 2 / 3;
+        var positionToMiddleDeviation = dataCopy.GroupBy(data => data.Position).ToDictionary(group => group.Key, group => group.Max(data => Math.Abs(data.Index % Console.WindowHeight - middleHeight)));
+        var minMiddleDeviation = positionToMiddleDeviation.Values.Min();
+        var positionWithWorkedData = positionToMiddleDeviation.Where(group => group.Value == minMiddleDeviation).OrderBy(_ => Random.Next()).Select(group => group.Key).First();
+        return positionWithWorkedData;
     }
 
     public static void WaitForExit()
